@@ -122,7 +122,6 @@ let score = 0;
 let coins = 0;
 let bestScore = parseInt(localStorage.getItem('bestScore') || '0');
 
-// === DIFFICULTY SETTINGS (gentler) ===
 let gameSpeed = 0.25;
 let obstacleGap = 25;
 let coinGap = 22;
@@ -151,13 +150,41 @@ function jump() {
     }
 }
 
+function pauseGame() {
+    if (gameState === 'playing') {
+        gameState = 'paused';
+        musicPlayer.pause();
+        updateMusicButtons();
+        showPauseOverlay();
+    }
+}
+
+function resumeGame() {
+    if (gameState === 'paused') {
+        gameState = 'playing';
+        hidePauseOverlay();
+        musicPlayer.play().catch(() => {});
+        updateMusicButtons();
+    }
+}
+
 document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        if (gameState === 'playing') pauseGame();
+        else if (gameState === 'paused') resumeGame();
+        return;
+    }
+    if (e.key === 'p' || e.key === 'P') {
+        if (gameState === 'playing') pauseGame();
+        else if (gameState === 'paused') resumeGame();
+        else togglePlayPause();
+        return;
+    }
     if (gameState !== 'playing') return;
     if (e.key === 'a' || e.key === 'ArrowLeft') moveLeft();
     if (e.key === 'd' || e.key === 'ArrowRight') moveRight();
     if (e.key === 'w' || e.key === 'ArrowUp' || e.key === ' ') jump();
     if (e.key === 'm' || e.key === 'M') toggleMute();
-    if (e.key === 'p' || e.key === 'P') togglePlayPause();
 });
 
 // --- 7. TOUCH INPUT ---
@@ -174,6 +201,7 @@ document.addEventListener('touchstart', (e) => {
 
 document.addEventListener('touchend', (e) => {
     if (gameState !== 'playing') return;
+    if (e.target.tagName === 'BUTTON' || e.target.closest('#music-panel') || e.target.closest('#pause-btn')) return;
     const t = e.changedTouches[0];
     const dx = t.clientX - touchStartX;
     const dy = t.clientY - touchStartY;
@@ -188,19 +216,53 @@ document.addEventListener('touchend', (e) => {
     }
 }, { passive: true });
 
-// --- 8. SOUND ---
+// --- 8. SOUND (mobile-safe version) ---
+// We create each audio element ONCE and reuse it by resetting currentTime.
+// This is important for mobile — clones are treated as new audio and blocked.
 const jumpSound = new Audio('music/jump.mp3');
 const coinSound = new Audio('music/coin.mp3');
 const crashSound = new Audio('music/crash.mp3');
 jumpSound.volume = 0.4;
 coinSound.volume = 0.5;
 crashSound.volume = 0.6;
+jumpSound.preload = 'auto';
+coinSound.preload = 'auto';
+crashSound.preload = 'auto';
 
 function playSound(sound) {
-    const s = sound.cloneNode();
-    s.volume = sound.volume;
-    s.play().catch(() => {});
+    try {
+        sound.currentTime = 0;
+        const p = sound.play();
+        if (p && p.catch) p.catch(() => {});
+    } catch (err) {}
 }
+
+// Unlock audio on the first user interaction (mobile requirement).
+// This plays each sound silently once, so the browser marks them as "user-approved".
+function unlockAudio() {
+    [jumpSound, coinSound, crashSound].forEach(s => {
+        const oldVol = s.volume;
+        s.volume = 0;
+        const p = s.play();
+        if (p && p.then) {
+            p.then(() => {
+                s.pause();
+                s.currentTime = 0;
+                s.volume = oldVol;
+            }).catch(() => {
+                s.volume = oldVol;
+            });
+        } else {
+            s.volume = oldVol;
+        }
+    });
+    document.removeEventListener('touchstart', unlockAudio);
+    document.removeEventListener('click', unlockAudio);
+    document.removeEventListener('keydown', unlockAudio);
+}
+document.addEventListener('touchstart', unlockAudio, { once: true });
+document.addEventListener('click', unlockAudio, { once: true });
+document.addEventListener('keydown', unlockAudio, { once: true });
 
 // --- 9. OBSTACLES & COINS ---
 const obstacles = [];
@@ -355,6 +417,53 @@ function updateHUD() {
 }
 updateHUD();
 
+// --- 11b. PAUSE BUTTON ---
+const pauseBtn = document.createElement('button');
+pauseBtn.id = 'pause-btn';
+pauseBtn.innerText = '⏸';
+pauseBtn.style.cssText = 'position:absolute;top:15px;left:15px;padding:8px 14px;background:rgba(5,5,16,0.7);color:#00ffff;border:1px solid #00ffff;font-family:monospace;font-weight:bold;font-size:18px;cursor:pointer;z-index:15;display:none;';
+document.body.appendChild(pauseBtn);
+pauseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (gameState === 'playing') pauseGame();
+    else if (gameState === 'paused') resumeGame();
+});
+
+// --- 11c. PAUSE OVERLAY ---
+let pauseOverlay = null;
+
+function showPauseOverlay() {
+    pauseOverlay = document.createElement('div');
+    pauseOverlay.id = 'pause-overlay';
+    pauseOverlay.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(5,5,16,0.75);display:flex;align-items:center;justify-content:center;z-index:25;backdrop-filter:blur(4px);';
+    pauseOverlay.innerHTML = `
+        <div style="background:rgba(5,5,16,0.98);border:2px solid #00ffff;box-shadow:0 0 40px rgba(0,255,255,0.5);color:#fff;font-family:monospace;padding:40px 60px;text-align:center;min-width:320px;max-width:90vw;">
+            <div style="font-size:38px;color:#00ffff;text-shadow:0 0 15px #00ffff;margin-bottom:10px;">PAUSED</div>
+            <div style="font-size:13px;color:#888;margin-bottom:25px;">Take a breath. Hydrate. Stretch.</div>
+            <button id="resume-btn" style="display:block;width:100%;padding:14px;background:#ffd700;color:#000;border:none;font-family:monospace;font-weight:bold;font-size:16px;cursor:pointer;letter-spacing:2px;margin-bottom:10px;">▶ RESUME</button>
+            <button id="quit-btn" style="display:block;width:100%;padding:10px;background:transparent;color:#ff6b6b;border:1px solid #ff6b6b;font-family:monospace;font-weight:bold;font-size:12px;cursor:pointer;">QUIT TO MENU</button>
+        </div>
+    `;
+    document.body.appendChild(pauseOverlay);
+
+    document.getElementById('resume-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        resumeGame();
+    });
+    document.getElementById('quit-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        hidePauseOverlay();
+        resetGame();
+    });
+}
+
+function hidePauseOverlay() {
+    if (pauseOverlay) {
+        pauseOverlay.remove();
+        pauseOverlay = null;
+    }
+}
+
 // --- 12. MUSIC ---
 const playlist = [
     { name: 'Cyber Track 1', file: 'music/song1.mp3' },
@@ -370,6 +479,7 @@ musicPlayer.src = playlist[currentSongIndex].file;
 document.body.appendChild(musicPlayer);
 
 const musicPanel = document.createElement('div');
+musicPanel.id = 'music-panel';
 musicPanel.style.cssText = 'position:absolute;bottom:15px;left:15px;display:flex;gap:5px;align-items:center;padding:6px;background:rgba(5,5,16,0.8);border:1px solid #00ffff;box-shadow:0 0 10px rgba(0,255,255,0.3);font-family:monospace;z-index:10;';
 document.body.appendChild(musicPanel);
 const musicLabel = document.createElement('span');
@@ -425,7 +535,7 @@ menuModal.innerHTML = `
         <button id="how-to-play-btn" style="flex:1;padding:8px;background:transparent;color:#00ffff;border:1px solid #00ffff;font-family:monospace;font-weight:bold;font-size:11px;cursor:pointer;">HOW TO PLAY</button>
         <button id="leaderboard-btn" style="flex:1;padding:8px;background:transparent;color:#00ffff;border:1px solid #00ffff;font-family:monospace;font-weight:bold;font-size:11px;cursor:pointer;">LEADERBOARD</button>
     </div>
-    <div style="font-size:9px;color:#666;margin-top:15px;">Press <b style="color:#00ffff">M</b> to mute • <b style="color:#00ffff">P</b> to pause music</div>
+    <div style="font-size:9px;color:#666;margin-top:15px;">Press <b style="color:#00ffff">Esc</b> or <b style="color:#00ffff">P</b> to pause</div>
 `;
 document.body.appendChild(menuModal);
 
@@ -453,20 +563,34 @@ function startGame() {
     if (gameState === 'menu') {
         gameState = 'playing';
         menuModal.style.display = 'none';
+        pauseBtn.style.display = 'block';
         musicPlayer.play().catch(() => {});
         updateMusicButtons();
     }
 }
 
-// --- 14. HOW TO PLAY ---
+// --- 14. HOW TO PLAY (auto-detects mobile vs desktop) ---
+function isMobileDevice() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+        || ('ontouchstart' in window && window.innerWidth < 1024);
+}
+
 function showHowToPlay() {
+    const mobile = isMobileDevice();
+    const controlsHtml = mobile
+        ? `<b style="color:#00ffff;">Swipe LEFT / RIGHT</b> — Change lane<br>
+           <b style="color:#00ffff;">Swipe UP</b> or <b style="color:#00ffff;">TAP</b> — Jump<br>
+           <b style="color:#00ffff;">Tap the ⏸ button</b> — Pause`
+        : `<b style="color:#00ffff;">A / D</b> or <b style="color:#00ffff;">← / →</b> — Change lane<br>
+           <b style="color:#00ffff;">W / ↑ / Space</b> — Jump<br>
+           <b style="color:#00ffff;">Esc / P</b> — Pause`;
+
     const modal = document.createElement('div');
     modal.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(5,5,16,0.98);border:2px solid #00ffff;box-shadow:0 0 40px rgba(0,255,255,0.5);color:#fff;font-family:monospace;padding:30px 40px;text-align:left;z-index:30;min-width:320px;max-width:90vw;';
     modal.innerHTML = `
         <div style="font-size:24px;text-align:center;color:#00ffff;margin-bottom:15px;">HOW TO PLAY</div>
         <div style="font-size:13px;line-height:1.7;">
-            <b style="color:#00ffff;">Desktop:</b> A/D to move, W/Space to jump<br>
-            <b style="color:#00ffff;">Mobile:</b> Swipe left/right, swipe up or tap to jump<br>
+            ${controlsHtml}
             <hr style="border-color:#333;margin:12px 0;">
             <b style="color:#ff3333;">🔴 Red Walls</b> — Switch lanes to dodge<br>
             <b style="color:#ff9900;">🟠 Orange Barriers</b> — Jump over them<br>
@@ -539,6 +663,7 @@ function saveToLeaderboard(name, score, coins) {
 
 function gameOver() {
     gameState = 'gameover';
+    pauseBtn.style.display = 'none';
     musicPlayer.pause();
     updateMusicButtons();
     playSound(crashSound);
@@ -607,6 +732,8 @@ function resetGame() {
     updateHUD();
     gameState = 'menu';
     menuModal.style.display = 'block';
+    pauseBtn.style.display = 'none';
+    hidePauseOverlay();
     updateMenuUserInfo();
 }
 
@@ -643,7 +770,6 @@ function animate() {
 
         score += gameSpeed;
 
-        // === DIFFICULTY RAMP (gentler) ===
         gameSpeed = Math.min(MAX_SPEED, BASE_SPEED + score * 0.0003);
         obstacleGap = Math.max(MIN_OBSTACLE_GAP, BASE_OBSTACLE_GAP - score * 0.012);
         coinGap = Math.max(15, 22 - score * 0.005);
