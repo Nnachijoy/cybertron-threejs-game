@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getCurrentUser, onUserChange, signIn, START_NG } from './platform.js';
+import { getCurrentUser, getGuest, onUserChange, signIn, saveScore, getLeaderboard, START_NG } from './platform.js';
 
 // --- 1. SETUP ---
 const scene = new THREE.Scene();
@@ -216,9 +216,7 @@ document.addEventListener('touchend', (e) => {
     }
 }, { passive: true });
 
-// --- 8. SOUND (mobile-safe version) ---
-// We create each audio element ONCE and reuse it by resetting currentTime.
-// This is important for mobile — clones are treated as new audio and blocked.
+// --- 8. SOUND ---
 const jumpSound = new Audio('music/jump.mp3');
 const coinSound = new Audio('music/coin.mp3');
 const crashSound = new Audio('music/crash.mp3');
@@ -237,8 +235,6 @@ function playSound(sound) {
     } catch (err) {}
 }
 
-// Unlock audio on the first user interaction (mobile requirement).
-// This plays each sound silently once, so the browser marks them as "user-approved".
 function unlockAudio() {
     [jumpSound, coinSound, crashSound].forEach(s => {
         const oldVol = s.volume;
@@ -309,23 +305,31 @@ function spawnCoin() {
     coinObjects.push({ mesh, lane: laneIndex });
 }
 
-// --- 10. START.NG UI ---
+// --- 10. START.NG USER INTERFACE ---
 const userDisplay = document.getElementById('ui');
 const loginBtn = document.getElementById('login-btn');
 let hatMesh = null;
 let accessoryMesh = null;
+let hairMesh = null;
 let currentUserName = 'Guest';
 
+// Default guest style so the game always looks nice, even off start.ng.
+const DEFAULT_GUEST_STYLE = {
+    primaryColor: '#ff6b6b',
+    secondaryColor: '#2b2f4a',
+    skinColor: '#8d5524',
+    hairColor: '#17120f',
+    hair: 'short',
+    hat: 'tophat',
+    accessory: 'glasses'
+};
+
 function applyUserStyle(user) {
-    if (!user || !user.style) {
-        bodyMat.color.set(0x00ffff);
-        bodyMat.emissive.set(0x005555);
-        legMat.color.set(0x00ffff);
-        armMat.color.set(0x00ffff);
-        playerLight.color.set(0x00ffff);
-        return;
-    }
-    const s = user.style;
+    const s = (user && user.style) ? user.style : DEFAULT_GUEST_STYLE;
+
+    // Clear old hair
+    if (hairMesh) { playerGroup.remove(hairMesh); hairMesh = null; }
+
     if (s.primaryColor) {
         bodyMat.color.set(s.primaryColor);
         legMat.color.set(s.primaryColor);
@@ -334,6 +338,36 @@ function applyUserStyle(user) {
     }
     if (s.secondaryColor) bodyMat.emissive.set(s.secondaryColor);
 
+    // --- HAIR (drawn before hat so hat sits on top) ---
+    if (s.hair && s.hair !== 'bald') {
+        const hairColor = s.hairColor || '#17120f';
+        const hairMat = new THREE.MeshStandardMaterial({ color: hairColor });
+        let hairGeo;
+        if (s.hair === 'afro') {
+            hairGeo = new THREE.SphereGeometry(0.55, 16, 12);
+            hairMesh = new THREE.Mesh(hairGeo, hairMat);
+            hairMesh.position.y = 2.15;
+        } else if (s.hair === 'braids' || s.hair === 'dreads' || s.hair === 'ponytail') {
+            hairGeo = new THREE.SphereGeometry(0.52, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.65);
+            hairMesh = new THREE.Mesh(hairGeo, hairMat);
+            hairMesh.position.y = 2.1;
+        } else if (s.hair === 'bun') {
+            hairGeo = new THREE.SphereGeometry(0.5, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.6);
+            hairMesh = new THREE.Mesh(hairGeo, hairMat);
+            hairMesh.position.y = 2.1;
+            const bun = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), hairMat);
+            bun.position.set(0, 2.55, -0.15);
+            playerGroup.add(bun);
+        } else {
+            // short (default)
+            hairGeo = new THREE.SphereGeometry(0.5, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55);
+            hairMesh = new THREE.Mesh(hairGeo, hairMat);
+            hairMesh.position.y = 2.15;
+        }
+        if (hairMesh) playerGroup.add(hairMesh);
+    }
+
+    // --- HAT ---
     if (hatMesh) { playerGroup.remove(hatMesh); hatMesh = null; }
     if (s.hat && s.hat !== 'none') {
         let hatGeo;
@@ -356,6 +390,10 @@ function applyUserStyle(user) {
             const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.05, 16), hatMat);
             brim.position.y = 2.3;
             playerGroup.add(brim);
+        } else if (s.hat === 'crown') {
+            hatGeo = new THREE.CylinderGeometry(0.45, 0.5, 0.2, 16);
+            hatMesh = new THREE.Mesh(hatGeo, new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0x332200 }));
+            hatMesh.position.y = 2.35;
         } else {
             hatGeo = new THREE.ConeGeometry(0.45, 0.45, 16);
             hatMesh = new THREE.Mesh(hatGeo, hatMat);
@@ -364,6 +402,7 @@ function applyUserStyle(user) {
         if (hatMesh) playerGroup.add(hatMesh);
     }
 
+    // --- ACCESSORY ---
     if (accessoryMesh) { playerGroup.remove(accessoryMesh); accessoryMesh = null; }
     if (s.accessory && s.accessory !== 'none') {
         if (s.accessory === 'glasses') {
@@ -385,12 +424,31 @@ function applyUserStyle(user) {
             );
             accessoryMesh.position.set(0, 2.15, 0);
             accessoryMesh.rotation.x = Math.PI / 2;
+        } else if (s.accessory === 'earrings') {
+            const earringMat = new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0x332200 });
+            const lEar = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), earringMat);
+            lEar.position.set(-0.5, 2.0, 0);
+            playerGroup.add(lEar);
+            const rEar = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), earringMat);
+            rEar.position.set(0.5, 2.0, 0);
+            playerGroup.add(rEar);
+            accessoryMesh = lEar;
+        } else if (s.accessory === 'beard') {
+            accessoryMesh = new THREE.Mesh(
+                new THREE.SphereGeometry(0.35, 12, 8, 0, Math.PI * 2, Math.PI * 0.55, Math.PI * 0.4),
+                new THREE.MeshStandardMaterial({ color: s.hairColor || '#17120f' })
+            );
+            accessoryMesh.position.set(0, 1.75, 0.15);
         }
-        if (accessoryMesh) playerGroup.add(accessoryMesh);
+        if (accessoryMesh && s.accessory !== 'earrings') playerGroup.add(accessoryMesh);
     }
 }
 
-onUserChange((user) => {
+// Apply the default look immediately so the character is styled from frame one.
+applyUserStyle(null);
+userDisplay.innerText = 'PILOT: Guest';
+
+onUserChange((user, guest) => {
     if (user) {
         currentUserName = user.name;
         userDisplay.innerText = `PILOT: ${user.name}`;
@@ -401,6 +459,7 @@ onUserChange((user) => {
         userDisplay.innerText = 'PILOT: Guest';
         if (START_NG && loginBtn) loginBtn.style.display = 'block';
         else if (loginBtn) loginBtn.style.display = 'none';
+        applyUserStyle(guest);
     }
     if (menuModal && menuModal.style.display !== 'none') updateMenuUserInfo();
 });
@@ -417,11 +476,11 @@ function updateHUD() {
 }
 updateHUD();
 
-// --- 11b. PAUSE BUTTON ---
+// --- 11b. PAUSE BUTTON (below the PILOT text) ---
 const pauseBtn = document.createElement('button');
 pauseBtn.id = 'pause-btn';
-pauseBtn.innerText = '⏸';
-pauseBtn.style.cssText = 'position:absolute;top:15px;left:15px;padding:8px 14px;background:rgba(5,5,16,0.7);color:#00ffff;border:1px solid #00ffff;font-family:monospace;font-weight:bold;font-size:18px;cursor:pointer;z-index:15;display:none;';
+pauseBtn.innerText = '⏸ PAUSE';
+pauseBtn.style.cssText = 'position:absolute;top:60px;left:15px;padding:8px 14px;background:rgba(5,5,16,0.7);color:#00ffff;border:1px solid #00ffff;font-family:monospace;font-weight:bold;font-size:12px;cursor:pointer;z-index:15;display:none;letter-spacing:1px;';
 document.body.appendChild(pauseBtn);
 pauseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -542,14 +601,15 @@ document.body.appendChild(menuModal);
 function updateMenuUserInfo() {
     const el = document.getElementById('menu-user');
     const signInBtn = document.getElementById('sign-in-startng');
+    if (!el) return;
     if (currentUserName === 'Guest') {
         el.innerText = 'Not signed in — playing as guest';
         el.style.color = '#ff9900';
-        signInBtn.style.display = START_NG ? 'block' : 'none';
+        if (signInBtn) signInBtn.style.display = START_NG ? 'block' : 'none';
     } else {
         el.innerText = `Signed in as ${currentUserName}`;
         el.style.color = '#00ffff';
-        signInBtn.style.display = 'none';
+        if (signInBtn) signInBtn.style.display = 'none';
     }
 }
 updateMenuUserInfo();
@@ -569,7 +629,7 @@ function startGame() {
     }
 }
 
-// --- 14. HOW TO PLAY (auto-detects mobile vs desktop) ---
+// --- 14. HOW TO PLAY ---
 function isMobileDevice() {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
         || ('ontouchstart' in window && window.innerWidth < 1024);
@@ -607,7 +667,7 @@ function showLeaderboard() {
     const lb = JSON.parse(localStorage.getItem('leaderboard') || '[]');
     let listHtml = '';
     if (lb.length === 0) {
-        listHtml = '<div style="text-align:center;color:#666;padding:20px;">NO SCORES YET. GO SET ONE!</div>';
+        listHtml = '<div style="text-align:center;color:#666;padding:20px;">NO LOCAL SCORES YET. GO SET ONE!</div>';
     } else {
         listHtml = lb.map((entry, i) => `
             <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #222;">
@@ -620,11 +680,35 @@ function showLeaderboard() {
     modal.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(5,5,16,0.98);border:2px solid #00ffff;box-shadow:0 0 40px rgba(0,255,255,0.5);color:#fff;font-family:monospace;padding:30px 40px;text-align:left;z-index:30;min-width:320px;max-width:90vw;';
     modal.innerHTML = `
         <div style="font-size:24px;text-align:center;color:#00ffff;margin-bottom:15px;">LEADERBOARD</div>
+        <div style="font-size:11px;color:#888;text-align:center;margin-bottom:10px;">Your scores on this device</div>
         <div style="font-size:13px;">${listHtml}</div>
+        <div id="global-board" style="font-size:13px;margin-top:15px;"></div>
         <button id="close-lb" style="display:block;width:100%;margin-top:20px;padding:10px;background:#ffd700;color:#000;border:none;font-family:monospace;font-weight:bold;font-size:13px;cursor:pointer;">BACK</button>
     `;
     document.body.appendChild(modal);
     document.getElementById('close-lb').addEventListener('click', (e) => { e.stopPropagation(); modal.remove(); });
+
+    getLeaderboard(10).then((reply) => {
+        const container = document.getElementById('global-board');
+        if (!container) return;
+        if (reply && reply.ok && Array.isArray(reply.entries) && reply.entries.length > 0) {
+            const rows = reply.entries.map((entry) => {
+                const stats = entry.stats || {};
+                const scoreVal = stats.score ?? entry.score ?? 0;
+                const coinsVal = stats.coins ?? 0;
+                return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #222;">
+                    <span style="color:#00ffff;">#${entry.rank} ${entry.name}</span>
+                    <span>${scoreVal} pts · ${coinsVal} coins</span>
+                </div>`;
+            }).join('');
+            container.innerHTML = `
+                <div style="font-size:11px;color:#888;text-align:center;margin-top:10px;margin-bottom:10px;">🌍 Global start.ng leaderboard</div>
+                ${rows}
+            `;
+        } else {
+            container.innerHTML = `<div style="font-size:11px;color:#888;text-align:center;margin-top:10px;">Play on start.ng to appear on the global board.</div>`;
+        }
+    }).catch(() => {});
 }
 
 // --- 16. COLLISION & GAME OVER ---
@@ -674,6 +758,10 @@ function gameOver() {
     }
     updateHUD();
     saveToLeaderboard(currentUserName, score, coins);
+
+    saveScore({ score: Math.floor(score), coins: coins }).then((result) => {
+        console.log('start.ng score save:', result);
+    }).catch(() => {});
 
     setTimeout(() => {
         const overDiv = document.createElement('div');

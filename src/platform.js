@@ -1,90 +1,90 @@
 // src/platform.js
+// Talks to start.ng through its hidden connect page.
+// Adapted from https://start.ng/docs.md
 
-// 1. Work out where start.ng is based on the current URL
-let START_NG = null;
-if (window.location.hostname.endsWith('.start.ng')) {
-    START_NG = 'https://start.ng';
-} else if (window.location.hostname.endsWith('.start.localhost')) {
-    START_NG = 'http://start.localhost:5173';
+const START_NG = 'https://start.ng';
+let frame;
+
+function connectFrame() {
+  frame ??= new Promise((resolve, reject) => {
+    const el = document.createElement('iframe');
+    el.src = `${START_NG}/connect`;
+    el.hidden = true;
+    el.onload = () => resolve(el);
+    el.onerror = reject;
+    document.body.append(el);
+  });
+  return frame;
 }
 
-// 2. Set up the iframe connection
-let iframe = null;
-let user = null;
+async function askStartNg(message, replyType, timeoutMs = 5000) {
+  const el = await connectFrame();
+  return new Promise((resolve) => {
+    const requestId = Math.random().toString(36).slice(2);
+    const done = (reply) => { clearTimeout(timer); removeEventListener('message', onMessage); resolve(reply); };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    function onMessage(e) {
+      if (e.origin !== START_NG || e.source !== el.contentWindow) return;
+      if (e.data?.type === replyType && e.data.requestId === requestId) done(e.data);
+    }
+    addEventListener('message', onMessage);
+    el.contentWindow.postMessage({ ...message, requestId }, START_NG);
+  });
+}
+
 let userChangeCallback = null;
+let currentUser = null;
+let currentGuest = null;
 
-if (START_NG) {
-    iframe = document.createElement('iframe');
-    iframe.src = `${START_NG}/connect`;
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
-
-    window.addEventListener('message', (event) => {
-        // Security check: Only accept messages from start.ng
-        if (event.origin !== START_NG) return;
-        
-        const data = event.data;
-        if (data && data.type === 'startng:user') {
-            user = data.user; // { id, name, style } or null
-            if (userChangeCallback) userChangeCallback(user);
-        }
-    });
+async function fetchUser() {
+  const reply = await askStartNg({ type: 'startng:whoami' }, 'startng:user');
+  if (!reply) return;
+  currentUser = reply.user ?? null;
+  currentGuest = reply.guest ?? null;
+  if (userChangeCallback) {
+    try { userChangeCallback(currentUser, currentGuest); } catch (e) { console.warn('user callback error:', e); }
+  }
 }
 
-// 3. Functions to export
-export function getCurrentUser() {
-    return user;
-}
+export function getCurrentUser() { return currentUser; }
+export function getGuest() { return currentGuest; }
 
-export function onUserChange(callback) {
-    userChangeCallback = callback;
-    // Immediately call with current user if we have one
-    if (user) callback(user);
+export function onUserChange(cb) {
+  userChangeCallback = cb;
+  if (currentUser || currentGuest) {
+    try { cb(currentUser, currentGuest); } catch (e) { console.warn('user callback error:', e); }
+  }
 }
 
 export function signIn() {
-    if (!START_NG) {
-        alert("Sign-in isn't available here. Playing as guest.");
-        return;
-    }
-    window.location.href = `${START_NG}/?return_to=${encodeURIComponent(window.location.href)}`;
+  location.href = `${START_NG}/?return_to=${encodeURIComponent(location.origin + location.pathname)}`;
 }
 
-// 4. Ping start.ng to ask who is signed in
-export function checkUser() {
-    if (!START_NG || !iframe) return;
-    const requestId = Date.now().toString();
-    iframe.contentWindow.postMessage({ type: 'startng:whoami', requestId }, START_NG);
+export async function saveScore(stats) {
+  if (!currentUser) return { ok: false, error: 'Sign in to save your score' };
+  const reply = await askStartNg(
+    { type: 'startng:score', stats },
+    'startng:scoreSaved'
+  );
+  return reply ?? { ok: false, error: 'No reply from start.ng' };
 }
 
-// 5. Events: Check on load, focus, and tab visibility
-window.addEventListener('load', () => {
-    checkUser();
-    
-    // Fallback: If start.ng doesn't reply in 3 seconds, force Guest with a test style
-    setTimeout(() => {
-        if (!user) {
-            console.log("Forcing Guest fallback with test style.");
-            user = { 
-                id: 'guest', 
-                name: 'Guest', 
-                style: { 
-                    primaryColor: '#ff6b6b', 
-                    secondaryColor: '#2b2f4a', 
-                    skinColor: '#8d5524', 
-                    hat: 'tophat', 
-                    accessory: 'glasses' 
-                } 
-            };
-            if (userChangeCallback) userChangeCallback(user);
-        }
-    }, 3000);
+export async function getLeaderboard(limit = 10) {
+  const reply = await askStartNg(
+    { type: 'startng:leaderboard', limit },
+    'startng:leaderboardData'
+  );
+  return reply ?? { ok: false, entries: [] };
+}
+
+// Ask on load and when the player returns to the tab.
+addEventListener('load', fetchUser);
+addEventListener('focus', fetchUser);
+addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') fetchUser();
 });
 
-window.addEventListener('focus', checkUser);
+// Delay the initial fetch so game.js can set up its callback first.
+setTimeout(fetchUser, 1500);
 
-document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') checkUser();
-});
-
-export { START_NG };
+export { askStartNg, START_NG };
