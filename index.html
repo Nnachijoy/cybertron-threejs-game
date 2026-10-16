@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cybertron Runner</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050510; font-family: monospace; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #00ffff; font-size: 20px; text-shadow: 0 0 10px #00ffff; pointer-events: none; z-index: 10; }
+        #login-btn { position: absolute; top: 20px; right: 20px; padding: 10px 20px; background: #00ffff; border: none; cursor: pointer; font-family: monospace; font-weight: bold; z-index: 10; display: none; }
+    </style>
+</head>
+<body>
+    <div id="ui">PILOT: LOADING...</div>
+    <button id="login-btn">SIGN IN WITH START.NG</button>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+    <script type="module" src="/src/game.js"></script>
+</body>
+</html>
